@@ -1,0 +1,84 @@
+#############################################
+# Common parameters                         #
+#############################################
+# Block size in bytes for dd command
+BLOCK_SIZE=1000000
+# Maximum size in bytes of slice (default is 2G)
+MAX_SIZE=2000000000
+# Calculate number of blocks per slice
+let NUM_BLOCKS=$MAX_SIZE/$BLOCK_SIZE
+# Maximum number of tries
+MAX_RETRIES=5
+# Wait in seconds before next try
+WAIT_TO_RETRY=300
+# Maximum number of retries if "dd" command fails
+DD_MAX_RETRIES=20
+
+#############################################
+# Settings for Source site                  #
+#############################################
+# Target directory for image files
+SRC_DIR=/media/asmdisks
+# Maximum number of disks to proceed for saving to image files at the same time
+SRC_MAX_DISKS=4
+# Maximum number of parallel jobs to read/write raw data
+SRC_MAX_JOBS=5
+# List of hosts to use in parallel, delimited by comma
+SRC_HOSTS=
+# Names of configuration files
+SRC_DISKS_LST=asm_disks.lst
+
+#############################################
+# Settings for Target site                  #
+#############################################
+# Source directory with image files
+TGT_DIR=/media/asmdisks
+# Maximum number of disks to import from image files at the same time
+TGT_MAX_DISKS=4
+# Maximum number of parallel jobs to read/write raw data
+TGT_MAX_JOBS=5
+# List of hosts to use in parallel, delimited by comma
+TGT_HOSTS=
+# Names of configuration files
+TGT_DEVICES_LST=asm_devices.lst
+
+#############################################
+# Send files over network by netcat utility #
+#############################################
+# List of base netcat ports to use in parallel, delimited by comma
+TGT_NETCAT_PORTS=50000,51000,52000,53000,54000,55000,56000,57000
+# Netcat binaries (https://nmap.org/dist/nmap-6.47.tar.bz2)
+SRC_NETCAT_CMD=/usr/local/bin/ncat
+TGT_NETCAT_CMD=/usr/local/bin/ncat
+# Default target host and base netcat port
+TGT_NETCAT_PORT=50000
+TGT_HOST=pceudb13
+# Maximum number of retries if send is failed
+SEND_MAX_RETRIES=5
+
+#################################################################
+# Notification                                                  #
+#################################################################
+SEND_EMAIL_TO=to-me@mail.com
+SEND_EMAIL_FROM=from-me@mail.com
+SEND_DOMAIN=mail.com
+
+#################################################################
+# Check for required free space in bytes in specified directory #
+#################################################################
+get_free_space() {
+  DIR=$1
+  local S=`df --block-size=1 -P $DIR | grep -v '^Filesystem' | tail -1 | awk '{print($4)}'`
+  echo $S
+}
+
+check_for_free_space() {
+  DIR=$1
+  SIZE=$2
+  SPACE=`get_free_space $DIR`
+  while [ $SPACE -le $SIZE ]; do
+    echo "Waiting for enough free space in \"$DIR\". It's $SPACE bytes now while $SIZE bytes is expecited."
+    sleep 300
+    SPACE=`get_free_space $DIR`
+  done
+}

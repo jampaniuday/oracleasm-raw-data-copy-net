@@ -1,0 +1,166 @@
+#!/bin/bash
+#
+# Proceed with basic initial configuration
+#
+WORK_DIR=$( pushd $(dirname $0) >/dev/null; pwd; popd >/dev/null )
+SETTINGS=$WORK_DIR/settings
+if [ -r $SETTINGS ]; then
+  . $SETTINGS
+else
+  echo "Settings file \"$SETTINGS\" is not found"
+  exit 2
+fi
+
+USAGE="Usage: $0 -m|--mode <init|check> -t|--type <files|direct> [--src-hosts <hosts for Source, delimited by comma. Default is current host>] [--tgt-hosts <hosts for Target, delimited by comma>] [ --source-only | --target-only ] [--src-asm-disks-file <Filename of ASM disks to copy. Default is \"source_asm_disks.lst\">] [--tgt-asm-devices-file <Filename of SAN devices to use for ASM disks. Default is \"target_asm_devices.lst\">] [--tgt-devices-prefix <prefix to use for filter multipathd devices, e.g. /dev/mapper/3600. Default is \"/dev/mapper/3600\">]"
+
+ARGS=`getopt -o ht:m: -l help,type:,mode:,source-only,target-only,src-hosts::,tgt-hosts::,src-asm-disks-file::,tgt-asm-devices-file::,tgt-devices-prefix:: -- "$@"`
+if [ $? -ne 0 ]; then
+  exit $?
+fi
+eval set -- "$ARGS"
+
+# extract options and their arguments into variables.
+while true ; do
+    case "$1" in
+        -h|--help) echo $USAGE; exit 0 ;;
+        -m|--mode)
+          case "$" in
+            "") shift 2 ;;
+            *) MODE=`echo $2 | tr '[:upper:]' '[:lower:]'`; shift 2 ;;
+          esac ;;
+        -t|--type)
+          case "$" in
+            "") shift 2 ;;
+            *) TYPE=`echo $2 | tr '[:upper:]' '[:lower:]'`; shift 2 ;;
+          esac ;;
+        --src-hosts)
+          case "$" in
+            "") shift 2 ;;
+            *) ARG_SRC_HOSTS=`echo $2 | tr '[:upper:]' '[:lower:]'`; shift 2 ;;
+          esac ;;
+        --tgt-hosts)
+          case "$" in
+            "") shift 2 ;;
+            *) AGT_TGT_HOSTS=`echo $2 | tr '[:upper:]' '[:lower:]'`; shift 2 ;;
+          esac ;;
+        --src-asm-disks-file)
+          case "$" in
+            "") shift 2 ;;
+            *) ARG_SRC_DISKS_LST=$2; shift 2 ;;
+          esac ;;
+        --tgt-asm-devices-file)
+          case "$" in
+            "") shift 2 ;;
+            *) ARG_TGT_DEVICES_LST=$2; shift 2 ;;
+          esac ;;
+        --tgt-devices-prefix)
+          case "$" in
+            "") shift 2 ;;
+            *) ARG_TGT_DEVICES_MASK=$2; shift 2 ;;
+          esac ;;
+        --source-only) ARG_SRC_ONLY=1; shift ;;
+        --target-only) ARG_TGT_ONLY=1; shift ;;
+        --) shift ; break ;;
+        *) echo "Unsupported parameter"; echo $USAGE; exit 1 ;;
+    esac
+done
+
+if [ -z "$MODE" ]; then
+  echo 'Parameter --mode must have value'
+  exit 99
+elif [[ "$MODE" != 'init' && "$MODE" != 'check' ]]; then
+  echo 'Parameter --mode accepts "init" and "check" values only'
+  exit 99
+fi
+
+if [ -z "$TYPE" ]; then
+  echo 'Parameter --type must have value'
+  exit 99
+elif [[ "$TYPE" != 'files' && "$TYPE" != 'direct' ]]; then
+  echo 'Parameter --type accepts "files" and "direct" values only'
+  exit 99
+fi
+
+if [[ -z "$ARG_SRC_ONLY" && -z "$ARG_TGT_ONLY" ]]; then
+  SRC_CONFIG=1
+  TGT_CONFIG=1
+elif [ -z "$ARG_SRC_ONLY" ]; then
+  SRC_CONFIG=0
+  TGT_CONFIG=1
+else
+  SRC_CONFIG=1
+  TGT_CONFIG=0
+fi
+
+if [ $SRC_CONFIG -eq 1 ]; then
+  # set hosts from parameter --src-hosts  or from settings file variable
+  SRC_HOSTS=${ARG_SRC_HOSTS:-"$SRC_HOSTS"}
+  # use current server hostname if not specified above 
+  SRC_HOSTS=${SRC_HOSTS:-`hostname -s`}
+
+  # set hosts from parameter --tgt-asm-devices-file or from settings file variable
+  SRC_DISKS_LST=${ARG_SRC_DISKS_LST:-"$SRC_DISKS_LST"}
+  # use default value if not specified above
+  SRC_DISKS_LST=${SRC_DISKS_LST:-'source_asm_disks.lst'}
+fi
+
+if [ $TGT_CONFIG -eq 1 ]; then
+  # set hosts from parameter --tgt-hosts or from settings file variable
+  TGT_HOSTS=${ARG_TGT_HOSTS:-"$TGT_HOSTS"}
+  if [ -z "$TGT_HOSTS" ]; then
+    echo 'Target hosts must be defined by --tgt-hosts or in settings file'
+    exit 99
+  fi
+
+  # set hosts from parameter --tgt-asm-devices-file or from settings file variable
+  TGT_DEVICES_LST=${ARG_TGT_DEVICES_LST:-"$TGT_DEVICES_LST"}
+  # use default value if not specified above
+  TGT_DEVICES_LST=${TGT_DEVICES_LST:-'target_asm_devices.lst'}
+
+  # set hosts from parameter --tgt-asm-devices-file or from settings file variable
+  # use default value if not specified above to form like '/dev/mapper/3600?????????????????????????????'
+  TGT_DEVICES_MASK=${ARG_TGT_DEVICES_MASK:-'/dev/mapper/3600?????????????????????????????'}
+#  TGT_DEVICES_MASK=`printf '%s%*.*s' "$TGT_DEVICES_MASK" 0 $((46 - ${#x})) $((printf '%0.1s' '?'{1..46}))`
+fi
+
+## Execution section
+if [ "$MODE" = 'init' ]; then
+  if [ $SRC_CONFIG -eq 1 ]; then
+    # Populate list of ASM disks into file
+    if [ -s $WORK_DIR/$SRC_DISKS_LST ]; then
+      echo "$WORK_DIR/$SRC_DISKS_LST already exists and is not empty. Ignore"
+    else
+      oracleasm listdisks > $WORK_DIR/$SRC_DISKS_LST
+      echo "$WORK_DIR/$SRC_DISKS_LST has been created and initiated"
+    fi
+  fi
+
+  if [ $TGT_CONFIG -eq 1 ]; then
+    if [ -f $WORK_DIR/$TGT_DEVICES_LST ]; then
+      echo "$WORK_DIR/$TGT_DEVICES_LST already exists"
+    else
+      ssh -o StrictHostKeyChecking=no $TGT_HOST "ls -1 $TGT_DEVICES_MASK 2>/dev/null" > $WORK_DIR/$TGT_DEVICES_LST
+      echo "$WORK_DIR/$TGT_DEVICES_LST has been created"
+    fi
+  fi
+
+elif [ "$MODE" = 'check' ]; then
+  if [ $SRC_CONFIG -eq 1 ]; then
+    if [ -s $WORK_DIR/$SRC_DISKS_LST ]; then
+      for d in `grep -v '^#' $WORK_DIR/$SRC_DISKS_LST | cut -d':' -f1`; do
+        if [ -b /dev/oracleasm/disks/$d ]; then
+          echo "$d - exists"
+        else
+          echo "$d - not found"
+        fi
+      done
+    else
+      echo "$WORK_DIR/$SRC_DISKS_LST doesn't exist or empty"
+      exit 99
+    fi
+  fi
+else
+  echo 'Parameter --mode accepts "init" and "check" values only'
+  exit 99
+fi
+
